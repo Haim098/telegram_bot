@@ -48,9 +48,9 @@ def load_firebase_config():
 
 def initialize_firebase():
     try:
-        # קביעת הנתיב לקובץ הconfig עם השם החדש
+        # קביעת הנתיב לקובץ הconfig עם השם העדכני ביותר
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        cred_path = os.path.join(BASE_DIR, 'config', 'shop-449e4-firebase-adminsdk-p5bza-2d6f2fd6c6.json')
+        cred_path = os.path.join(BASE_DIR, 'config', 'shop-449e4-firebase-adminsdk-p5bza-e5bf82b86a.json')
         
         logger.info(f"Initializing Firebase with credentials from: {cred_path}")
         
@@ -280,7 +280,7 @@ def verify_firebase_connection():
         result = test_ref.get()
         test_ref.delete()
         
-        # בדיקת ��ימות
+        # בדיקת ימות
         auth.get_user('test_uid')  # זה אמור להיכשל, אבל בצורה ספציפית
         
     except auth.UserNotFoundError:
