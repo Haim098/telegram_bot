@@ -1,0 +1,3 @@
+2024-10-28 18:08:34,601 - ShoppingBot - DEBUG - [firebase_connection.py:586] - Looking for Firebase SDK file at: C:\Users\מאיר\Desktop\telegram_bot\config\shop-449e4-firebase-adminsdk-p5bza-42321375db.json
+2024-10-28 18:08:34,602 - ShoppingBot - INFO - [firebase_connection.py:591] - Found Firebase SDK file at: C:\Users\מאיר\Desktop\telegram_bot\config\shop-449e4-firebase-adminsdk-p5bza-42321375db.json
+2024-10-28 18:08:34,602 - ShoppingBot - INFO - [firebase_connection.py:690] - Initializing Firebase with SDK from: C:\Users\מאיר\Desktop\telegram_bot\config\shop-449e4-firebase-adminsdk-p5bza-42321375db.json

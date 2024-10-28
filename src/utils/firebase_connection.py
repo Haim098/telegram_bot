@@ -1,20 +1,76 @@
 import os
+import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app, auth
 import requests
+import logging
+from functools import wraps
+import threading
+import _thread
+import json
 
-# עדכן את הנתיב לקובץ החדש
-firebase_sdk_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'shop-449e4-firebase-adminsdk-p5bza-42321375db.json')
+# הגדרת logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
-# בדיקת קיום הקובץ
-if not os.path.exists(firebase_sdk_path):
-    raise FileNotFoundError(f"Firebase Admin SDK file not found at: {firebase_sdk_path}")
+def load_firebase_config():
+    try:
+        # קביעת הנתיב המוחלט לקובץ
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        firebase_sdk_path = os.path.join(BASE_DIR, 'config', 'firebase-config.json')
+        
+        logger.debug(f"Base directory: {BASE_DIR}")
+        logger.debug(f"Looking for Firebase SDK file at: {firebase_sdk_path}")
+        
+        # קריאת הקובץ ובדיקת תקינותו
+        with open(firebase_sdk_path, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+            # הדפסת תוכן הקובץ לבדיקה (ללא ה-private key)
+            safe_config = config_data.copy()
+            safe_config['private_key'] = 'REDACTED'
+            logger.debug(f"Loaded config: {json.dumps(safe_config, indent=2)}")
+            
+            # בדיקה שה-private key מתחיל ומסתיים נכון
+            if not config_data.get('private_key', '').startswith('-----BEGIN PRIVATE KEY-----'):
+                raise ValueError("Private key format is invalid - missing header")
+            if not config_data.get('private_key', '').endswith('-----END PRIVATE KEY-----\n'):
+                raise ValueError("Private key format is invalid - missing footer")
+                
+        return firebase_sdk_path
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing Firebase config file: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading Firebase config: {e}")
+        raise
 
 try:
-    cred = credentials.Certificate(firebase_sdk_path)
-    initialize_app(cred)
-    db = firestore.client()
+    firebase_sdk_path = load_firebase_config()
+    
+    if not firebase_admin._apps:
+        logger.info(f"Initializing Firebase with SDK from: {firebase_sdk_path}")
+        
+        # קריאת הקובץ ישירות לתוך הזיכרון
+        with open(firebase_sdk_path, 'r', encoding='utf-8') as f:
+            cred_dict = json.load(f)
+            
+        cred = credentials.Certificate(cred_dict)  # שימוש בדיקט במקום בקובץ
+        
+        firebase_config = {
+            'storageBucket': 'shop-449e4.appspot.com',
+            'databaseURL': 'https://shop-449e4-default-rtdb.firebaseio.com'
+        }
+        
+        initialize_app(cred, firebase_config)
+        logger.info("Firebase app initialized successfully")
+        
+        # בדיקת חיבור מיידית
+        db = firestore.client()
+        db.collection('test').document('test').set({'test': True})
+        logger.info("Firebase connection verified")
+        
 except Exception as e:
-    print(f"Error initializing Firebase: {e}")
+    logger.error(f"Critical error connecting to Firebase: {str(e)}", exc_info=True)
     raise
 
 def add_item_to_list(user_id, item, quantity=1, category='כללי', notes=''):
@@ -43,18 +99,27 @@ def add_item_to_list(user_id, item, quantity=1, category='כללי', notes=''):
         return False
 
 def get_shopping_list(telegram_id):
+    if not check_connection():
+        print("Firebase connection is not available")
+        return None
     try:
         website_user_id = get_website_user_id(telegram_id)
-        print(f"Getting shopping list for Telegram ID: {telegram_id}, Website User ID: {website_user_id}")
-        if website_user_id:
-            items = db.collection('shoppingLists').where('userId', '==', website_user_id).stream()
-            item_list = [{**item.to_dict(), 'id': item.id} for item in items]
-            print(f"Retrieved {len(item_list)} items for user {website_user_id}")
-            print(f"Items: {item_list}")
-            return item_list
-        else:
-            print(f"No linked website user found for Telegram ID: {telegram_id}")
+        if not website_user_id:
             return None
+            
+        # שימוש בשורה אחת ללא המשכיות שורה
+        items = (db.collection('shoppingLists')
+                .where('userId', '==', website_user_id)
+                .limit(100)
+                .get())
+        
+        item_list = []
+        for item in items:
+            item_data = item.to_dict()
+            item_data['id'] = item.id
+            item_list.append(item_data)
+            
+        return item_list
     except Exception as e:
         print(f"Error getting shopping list: {e}")
         return None
@@ -140,3 +205,88 @@ def mark_item_as_done(telegram_id, item_name):
     except Exception as e:
         print(f"Error marking item as done: {e}")
         return False
+
+def check_connection():
+    try:
+        # בדיקה פשוטה שהחיבור עובד
+        test_ref = db.collection('test').document('test')
+        test_ref.set({'timestamp': firestore.SERVER_TIMESTAMP}, timeout=5)
+        result = test_ref.get(timeout=5)
+        test_ref.delete()
+        return True
+    except Exception as e:
+        print(f"Connection test failed: {e}")
+        return False
+
+def timeout(seconds):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = [TimeoutError('Function call timed out')]
+            def worker():
+                try:
+                    result[0] = func(*args, **kwargs)
+                except Exception as e:
+                    result[0] = e
+            thread = threading.Thread(target=worker)
+            thread.daemon = True
+            thread.start()
+            thread.join(seconds)
+            if isinstance(result[0], Exception):
+                raise result[0]
+            return result[0]
+        return wrapper
+    return decorator
+
+# שימוש בדקורטור על הפונקציות הקריטיות
+@timeout(10)
+def get_shopping_list(telegram_id):
+    if not check_connection():
+        print("Firebase connection is not available")
+        return None
+    try:
+        website_user_id = get_website_user_id(telegram_id)
+        if not website_user_id:
+            return None
+            
+        # שימוש בשורה אחת ללא המשכיות שורה
+        items = (db.collection('shoppingLists')
+                .where('userId', '==', website_user_id)
+                .limit(100)
+                .get())
+        
+        item_list = []
+        for item in items:
+            item_data = item.to_dict()
+            item_data['id'] = item.id
+            item_list.append(item_data)
+            
+        return item_list
+    except Exception as e:
+        print(f"Error getting shopping list: {e}")
+        return None
+
+def verify_firebase_connection():
+    try:
+        # בדיקת חיבור בסיסית
+        test_ref = db.collection('test').document('test')
+        test_ref.set({'timestamp': firestore.SERVER_TIMESTAMP})
+        result = test_ref.get()
+        test_ref.delete()
+        
+        # בדיקת אימות
+        auth.get_user('test_uid')  # זה אמור להיכשל, אבל בצורה ספציפית
+        
+    except auth.UserNotFoundError:
+        # זה בסדר - זה אומר שהאימות עובד
+        logger.info("Firebase authentication is working")
+        return True
+    except Exception as e:
+        logger.error(f"Firebase connection test failed: {e}")
+        return False
+
+# קרא לפונקציה בזמן האתחול
+if verify_firebase_connection():
+    logger.info("Firebase connection fully verified")
+else:
+    logger.error("Failed to verify Firebase connection")
