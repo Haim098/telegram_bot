@@ -12,66 +12,72 @@ import json
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+logger.debug(f"Current working directory: {os.getcwd()}")
+
 def load_firebase_config():
     try:
-        # קביעת הנתיב המוחלט לקובץ
         BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         firebase_sdk_path = os.path.join(BASE_DIR, 'config', 'firebase-config.json')
         
         logger.debug(f"Base directory: {BASE_DIR}")
         logger.debug(f"Looking for Firebase SDK file at: {firebase_sdk_path}")
         
-        # קריאת הקובץ ובדיקת תקינותו
         with open(firebase_sdk_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
+            
+            # טיפול במפתח הפרטי - הפעם בצורה פשוטה יותר
+            if 'private_key' in config_data:
+                # רק מחליף \n במעברי שורה אמיתיים
+                config_data['private_key'] = config_data['private_key'].replace('\\n', '\n')
+            
             # הדפסת תוכן הקובץ לבדיקה (ללא ה-private key)
             safe_config = config_data.copy()
-            safe_config['private_key'] = 'REDACTED'
+            if 'private_key' in safe_config:
+                safe_config['private_key'] = 'REDACTED'
             logger.debug(f"Loaded config: {json.dumps(safe_config, indent=2)}")
             
-            # בדיקה שה-private key מתחיל ומסתיים נכון
-            if not config_data.get('private_key', '').startswith('-----BEGIN PRIVATE KEY-----'):
-                raise ValueError("Private key format is invalid - missing header")
-            if not config_data.get('private_key', '').endswith('-----END PRIVATE KEY-----\n'):
-                raise ValueError("Private key format is invalid - missing footer")
-                
-        return firebase_sdk_path
+            # הדפסת מידע נוסף לדיבוג
+            logger.debug(f"Private key starts with: {config_data['private_key'][:50]}...")
+            logger.debug(f"Private key ends with: ...{config_data['private_key'][-50:]}")
             
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing Firebase config file: {e}")
-        raise
+        return config_data
+            
     except Exception as e:
         logger.error(f"Error loading Firebase config: {e}")
         raise
 
-try:
-    firebase_sdk_path = load_firebase_config()
-    
-    if not firebase_admin._apps:
-        logger.info(f"Initializing Firebase with SDK from: {firebase_sdk_path}")
+def initialize_firebase():
+    try:
+        # קביעת הנתיב לקובץ הconfig עם השם החדש
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        cred_path = os.path.join(BASE_DIR, 'config', 'shop-449e4-firebase-adminsdk-p5bza-2d6f2fd6c6.json')
         
-        # קריאת הקובץ ישירות לתוך הזיכרון
-        with open(firebase_sdk_path, 'r', encoding='utf-8') as f:
-            cred_dict = json.load(f)
-            
-        cred = credentials.Certificate(cred_dict)  # שימוש בדיקט במקום בקובץ
+        logger.info(f"Initializing Firebase with credentials from: {cred_path}")
         
-        firebase_config = {
-            'storageBucket': 'shop-449e4.appspot.com',
-            'databaseURL': 'https://shop-449e4-default-rtdb.firebaseio.com'
-        }
+        # אתחול Firebase עם הקובץ החדש
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
         
-        initialize_app(cred, firebase_config)
-        logger.info("Firebase app initialized successfully")
-        
-        # בדיקת חיבור מיידית
+        # בדיקת חיבור בסיסית
         db = firestore.client()
-        db.collection('test').document('test').set({'test': True})
-        logger.info("Firebase connection verified")
+        test_ref = db.collection('test').document('test')
+        test_ref.set({'test': True})
+        test_ref.delete()
         
-except Exception as e:
-    logger.error(f"Critical error connecting to Firebase: {str(e)}", exc_info=True)
-    raise
+        logger.info("Firebase initialized successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Firebase: {e}", exc_info=True)
+        return False
+
+# אתחול Firebase בתחילת הריצה
+if not firebase_admin._apps:
+    if not initialize_firebase():
+        raise Exception("Could not initialize Firebase")
+
+# יצירת client
+db = firestore.client()
 
 def add_item_to_list(user_id, item, quantity=1, category='כללי', notes=''):
     try:
@@ -274,11 +280,11 @@ def verify_firebase_connection():
         result = test_ref.get()
         test_ref.delete()
         
-        # בדיקת אימות
+        # בדיקת ��ימות
         auth.get_user('test_uid')  # זה אמור להיכשל, אבל בצורה ספציפית
         
     except auth.UserNotFoundError:
-        # זה בסדר - זה אומר שהאימות עובד
+        # זה בסדר - זה אומר שהאמות עובד
         logger.info("Firebase authentication is working")
         return True
     except Exception as e:
